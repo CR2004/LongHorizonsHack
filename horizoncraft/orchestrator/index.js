@@ -40,29 +40,32 @@ async function parseRequest(state, title) {
 }
 
 function checkpoint(state, type, payload = {}) {
-    const { tokens } = render(state);
-    state.context_history.push(tokens); if (state.context_history.length > 200) state.context_history.shift();
+    const { tokens } = render(state);   // size of the rendered memory slice (estimate); the chart uses real interpreter prompt tokens
     saveState(state);
     emit('system', type, { ...payload, context_chars: tokens * 4 }, tokens);
 }
 
 // Weather requests bypass the asset pipeline: "make it rain", "set weather to fog", "reset weather" / "real weather".
-const WEATHER_RE = /\b(rain\w*|storm\w*|fog\w*|mist\w*|cloud\w*|overcast|clear|sunny|sun|snow\w*)\b/i;
+const WEATHER_RE = /\b(rain\w*|storm\w*|fog\w*|mist\w*|cloud\w*|overcast|clear|sunny|sun|snow\w*|night\w*|stars|dark|day\w*|morning|noon)\b/i;
 function weatherRequest(title) {
     const t = title.toLowerCase();
     if (/\b(reset|real|live|actual)\b.*\bweather\b|\bweather\b.*\b(reset|real|live|actual)\b/.test(t)) return { reset: true };
     if (!/\b(weather|make it|let it|set)\b/.test(t) || !WEATHER_RE.test(t)) return null;
     const w = t.match(WEATHER_RE)[1];
-    return { condition: /rain|storm|snow/.test(w) ? 'rain' : /fog|mist/.test(w) ? 'fog' : /cloud|overcast/.test(w) ? 'cloudy' : 'clear' };
+    if (/night|stars|dark/.test(w)) return { night: true };
+    if (/^day|morning|noon/.test(w)) return { night: false };
+    return { condition: /snow/.test(w) ? 'snow' : /rain|storm/.test(w) ? 'rain' : /fog|mist/.test(w) ? 'fog' : /cloud|overcast/.test(w) ? 'cloudy' : 'clear' };
 }
 async function processWeather(state, t, req) {
     state.live ??= {};
     switchTo(state, 'world', req.reset ? 'weather -> live' : `weather override -> ${req.condition}`);
-    if (req.reset) delete state.live.override; else state.live.override = { condition: req.condition, ticket_id: t.id, ts: new Date().toISOString() };
-    logEvent(state, 'weather', req.reset ? 'override cleared' : `override ${req.condition} (#${t.id})`);
+    if (req.reset) delete state.live.override;
+    else if (req.night != null) state.live.override = { ...(state.live.override || {}), night: req.night, ticket_id: t.id, ts: new Date().toISOString() };
+    else state.live.override = { ...(state.live.override || {}), condition: req.condition, ticket_id: t.id, ts: new Date().toISOString() };
+    logEvent(state, 'weather', req.reset ? 'override cleared' : `override ${req.night != null ? (req.night ? 'night' : 'day') : req.condition} (#${t.id})`);
     emit('world', 'weather', { ticket: t.id, ...req });
     checkpoint(state, 'checkpoint', { ticket: t.id, stage: 'weather' });
-    await board.commentAndClose(t.id, req.reset ? 'Weather back to live data.' : `Weather set to ${req.condition} (overrides live data until a "reset weather" ticket).`);
+    await board.commentAndClose(t.id, req.reset ? 'Sky back to live data.' : req.night != null ? `It's ${req.night ? 'night' : 'day'} now (until you say "reset weather").` : `Weather set to ${req.condition} (until you say "reset weather").`);
     t.status = 'done_verified'; state.counters.tickets_closed++;
     logEvent(state, 'ticket_update', `#${t.id} done_verified`); emit('board', 'ticket_update', { id: t.id, status: 'done_verified' });
     saveState(state);
@@ -75,9 +78,6 @@ function findAsset(state, ref) {
 }
 function quickCommand(title) {
     const t = title.trim(); let m;
-    if ((m = t.match(/^news (?:about|on|for) (.+)$/i))) return { kind: 'news', query: m[1].trim().slice(0, 60) };
-    if (/^(reset|clear|default) news$/i.test(t)) return { kind: 'news', query: null };
-    if ((m = t.match(/^move (.+?) to (-?\d+)\s*,\s*(-?\d+)$/i))) return { kind: 'move', ref: m[1], x: +m[2], z: +m[3] };
     if ((m = t.match(/^(?:remake|redo|regenerate) (.+)$/i))) return { kind: 'remake', ref: m[1] };
     if ((m = t.match(/^(?:remove|delete) (.+)$/i))) return { kind: 'remove', ref: m[1] };
     return null;
@@ -90,11 +90,6 @@ async function closeQuick(state, t, reply) {
 }
 async function processQuick(state, t, q) {
     state.live ??= {};
-    if (q.kind === 'news') {
-        state.live.news_query = q.query; switchTo(state, 'browser', q.query ? `news query -> ${q.query}` : 'news query reset');
-        emit('browser', 'live_update', { key: 'news_query', value: q.query });
-        return closeQuick(state, t, q.query ? `Billboard will show news about "${q.query}" on the next fetch (within ${Math.round(+(env.LIVE_INTERVAL_MS || 300000) / 1000)}s).` : 'Billboard back to the default headline feed.');
-    }
     const a = findAsset(state, q.ref);
     if (!a) return closeQuick(state, t, `I don't have anything called "${q.ref}" in the world.`);
     if (q.kind === 'move') {
@@ -124,17 +119,41 @@ async function applyAction(state, t, act, notes) {
     state.live ??= {};
     switch (act.type) {
         case 'weather': {
-            if (act.condition === 'reset') delete state.live.override; else state.live.override = { condition: act.condition, ticket_id: t.id, ts: new Date().toISOString() };
+            if (act.condition === 'reset') delete state.live.override;
+            else if (act.condition === 'night' || act.condition === 'day') state.live.override = { ...(state.live.override || {}), night: act.condition === 'night', ticket_id: t.id, ts: new Date().toISOString() };
+            else state.live.override = { ...(state.live.override || {}), condition: act.condition, ticket_id: t.id, ts: new Date().toISOString() };
             logEvent(state, 'weather', act.condition); emit('world', 'weather', { ticket: t.id, condition: act.condition }); notes.push(`weather: ${act.condition}`); break;
         }
-        case 'news': { state.live.news_query = act.query || null; emit('browser', 'live_update', { key: 'news_query', value: act.query }); notes.push(act.query ? `billboard: news about ${act.query}` : 'billboard: default news'); break; }
-        case 'live_weather': { state.live.place = act.place || null; emit('browser', 'live_update', { key: 'place', value: act.place }); notes.push(`sky follows ${act.place}`); live.tick(state, { save: () => saveState(state) }).catch(() => {}); break; }
+        case 'live_weather': {   // a new place means: show its real weather and time of day there
+            state.live.place = act.place || null; delete state.live.override;
+            emit('browser', 'live_update', { key: 'place', value: act.place }); notes.push(`sky follows ${act.place}`);
+            live.tick(state, { save: () => saveState(state) }).catch(() => {}); break;
+        }
         case 'remember': {
             state.personal ??= { facts: [] }; const f = String(act.fact || '').trim().slice(0, 140);
             if (f && !state.personal.facts.includes(f)) { state.personal.facts.push(f); if (state.personal.facts.length > 30) state.personal.facts.shift(); }
             logEvent(state, 'remember', f); emit('agent', 'remember', { fact: f }); notes.push(`remembered: ${f}`); break;
         }
-        case 'move': case 'remake': case 'remove': {
+        case 'move': {
+            const a = findAsset(state, act.ref); if (!a) { notes.push(`no "${act.ref}" in the world`); break; }
+            let pos = null;
+            if (act.away_from) {
+                const ref = findAsset(state, act.away_from) || (state.landmarks[String(act.away_from).toLowerCase()] ? { ...state.landmarks[String(act.away_from).toLowerCase()], name: act.away_from } : null);
+                if (ref) { const dx = a.x - ref.x, dz = a.z - ref.z, d = Math.hypot(dx, dz) || 1; pos = { x: Math.round(ref.x + dx / d * 40), z: Math.round(ref.z + dz / d * 40) }; }
+            }
+            const anchorOf = ref => { const f = findAsset(state, ref); if (f) return { x: f.x, z: f.z }; const l = state.landmarks[String(ref || '').toLowerCase()]; return l ? { x: l.x, z: l.z } : null; };
+            if (!pos && Array.isArray(act.between) && act.between.length === 2) { const p1 = anchorOf(act.between[0]), p2 = anchorOf(act.between[1]); if (p1 && p2) pos = { x: Math.round((p1.x + p2.x) / 2), z: Math.round((p1.z + p2.z) / 2) }; }
+            if (!pos && act.near && act.direction) { const p = anchorOf(act.near); const D = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] }[String(act.direction).toLowerCase()]; if (p && D) pos = { x: Math.round(p.x + D[0] * 15), z: Math.round(p.z + D[1] * 15) }; }
+            if (!pos && act.near) { const k = String(act.near).toLowerCase(); if (state.landmarks[k]) pos = pickPosition(state, k); }
+            if (!pos) pos = pickPosition(state, null);
+            a.x = pos.x; a.z = pos.z; state.landmarks[a.name.toLowerCase()] = { x: pos.x, z: pos.z, note: `moved by #${t.id}` };
+            switchTo(state, 'world', `move ${a.name} -> (${pos.x},${pos.z})`); notes.push(`moved ${a.name}${act.away_from ? ' away from ' + act.away_from : act.near ? ' near ' + act.near : ''}`); break;
+        }
+        case 'point': {
+            const a = findAsset(state, act.ref); state.live.point = a ? a.id : null;
+            notes.push(a ? `compass -> ${a.name}` : `no "${act.ref}" to point at`); break;
+        }
+        case 'remake': case 'remove': {
             const q = { kind: act.type, ref: act.ref, x: act.x, z: act.z };
             const a = findAsset(state, q.ref); if (!a) { notes.push(`no "${q.ref}" in the world`); break; }
             if (q.kind === 'move') { a.x = q.x; a.z = q.z; state.landmarks[a.name.toLowerCase()] = { x: q.x, z: q.z, note: `moved by #${t.id}` }; notes.push(`moved ${a.name}`); }
@@ -146,10 +165,17 @@ async function applyAction(state, t, act, notes) {
 }
 async function processConversation(state, t) {
     const r = await interpret(state, t.title, t.author);
-    emit('agent', 'interpret', { ticket: t.id, actions: r.actions.map(a => a.type), latency_ms: r.latencyMs, tokens: r.usage?.total_tokens });
+    const promptTokens = r.usage?.prompt_tokens || 0;
+    if (promptTokens) { state.context_history.push(promptTokens); if (state.context_history.length > 200) state.context_history.shift(); }
+    emit('agent', 'interpret', { ticket: t.id, actions: r.actions.map(a => a.type), latency_ms: r.latencyMs, prompt_tokens: promptTokens, completion_tokens: r.usage?.completion_tokens }, promptTokens);
     if (r.reply) await board.comment(t.id, r.reply).catch(() => {});   // talk first, build after
     const notes = [];
     const builds = r.actions.filter(a => a.type === 'build' && a.what);
+    if (t.photo && !builds.length) {   // a photo always means "put this person in the world", whatever else was said
+        const nameFact = r.actions.find(a => a.type === 'remember' && /name is|i'?m |this is/i.test(a.fact || ''))?.fact;
+        const name = (t.title.match(/(?:i'?m|i am|this is|my name is|call me)\s+([A-Z][\w-]{1,20})/i)?.[1]) || (nameFact?.match(/\b([A-Z][\w-]{1,20})\b/)?.[1]) || (t.author && t.author !== 'visitor' ? t.author : 'visitor');
+        builds.push({ type: 'build', what: name, near: null, size: 3 });
+    }
     for (const act of r.actions.filter(a => a.type !== 'build')) await applyAction(state, t, act, notes);
     // extra builds become their own requests so each gets the full pipeline + its own checkpoints
     for (const b of builds.slice(1)) await board.file(`${b.what}${b.near ? ` near ${b.near}` : ''}`, `${t.author || 'someone'} (plan)`).catch(() => {});
@@ -163,7 +189,8 @@ async function processConversation(state, t) {
 }
 
 async function processTicket(state, t) {
-    if (interpreterOn() && !t.build && !quickCommand(t.title) && !weatherRequest(t.title)) {
+    const fromPlan = /\(plan\)$/.test(t.author || '');   // filed by the agent itself: already a concrete build, never re-interpret
+    if (interpreterOn() && !fromPlan && !t.build && !quickCommand(t.title) && !weatherRequest(t.title)) {
         try {
             const summary = await processConversation(state, t);
             if (summary !== null) return closeQuick(state, t, summary || null);
@@ -177,8 +204,10 @@ async function processTicket(state, t) {
     const goal = `#${t.id} ${t.title}`;
     if (a.stage === 'queued') {
         switchTo(state, 'agent', `parse ${goal}`);
+        if (!t.build && /\(plan\)$/.test(t.author || '')) { const m = t.title.match(/^(.*?)(?:\s+near\s+(.+))?$/i); t.build = { what: m[1].trim(), near: m[2]?.trim() || null }; }
         const parsed = await parseRequest(state, t.photo ? t.title + ' [photo]' : (t.build ? `${t.build.what}${t.build.near ? ` near ${t.build.near}` : ''}` : t.title));
         if (t.build?.size) parsed.size = Math.min(30, Math.max(2, +t.build.size));
+        if (t.build?.what) parsed.name = t.build.what.slice(0, 40);   // the interpreter already named it; don't let LFM2 rename it
         Object.assign(a, parsed, { stage: 'parsed' });
         await collect(state, `parsed request: ${JSON.stringify(a)}`, { currentGoal: goal, source: 'lfm2' });
         checkpoint(state, 'checkpoint', { ticket: t.id, stage: a.stage, goal_stack: [{ goal }] });
@@ -212,7 +241,7 @@ async function processTicket(state, t) {
     const w = await (await fetch(`${env.TASKBOARD_URL || 'http://localhost:3100'}/world.json`)).json();
     if (!w.assets.some(x => x.id === a.id)) throw new Error('asset not visible in /world.json');
     switchTo(state, 'board', `close #${t.id}`);
-    const proof = `Placed "${a.name}" at (${a.x}, ${a.z})${a.near ? ` near ${a.near}` : ''}, height ${a.size}m. Image: ${a.image}. Model: ${a.url}`;
+    const proof = `Placed "${a.name}"${a.near ? ` near the ${a.near}` : ''}.`;
     await board.commentAndClose(t.id, proof);
     t.status = 'done_verified'; state.counters.tickets_closed++;
     logEvent(state, 'ticket_update', `#${t.id} done_verified`);
@@ -222,6 +251,7 @@ async function processTicket(state, t) {
 
 async function main() {
     const state = loadState();
+    for (const [k, a] of Object.entries(state.assets)) if (a.status !== 'placed' && ['done_verified', 'failed'].includes(state.tickets[k]?.status)) delete state.assets[k];
     const resuming = Object.values(state.tickets).filter(t => t.status === 'in_progress');
     if (resuming.length) {
         state.counters.resumes++;

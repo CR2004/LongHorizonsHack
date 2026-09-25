@@ -1,6 +1,8 @@
-# HorizonCraft — world-builder agent
+# HorizonCraft — a personal world builder
 
-A long-running agent that takes natural-language requests ("add a dragon near the lake") from a web task board and, over hours, turns each one into a 3D asset placed in a walkable open world. Typed memory (asset ledger, landmarks, failures, GC'd knowledge) keeps it coherent across dozens of slow requests, and it resumes mid-request after a kill.
+You talk to an agent; it builds a small 3D world that mirrors your conversation and keeps it alive for hours. "I'm heading to Tahoe to ski this weekend" → a ski chalet and snowy pines appear by the lake, the sky follows Tahoe's real weather, the billboard shows Tahoe ski news, and the agent remembers you ski. One page: chat + the world (`/world/`). The agent's memory is on `/dashboard/`.
+
+Under the hood every message is a request that the agent Typed memory (asset ledger, landmarks, failures, GC'd knowledge) keeps it coherent across dozens of slow requests, and it resumes mid-request after a kill.
 
 Sponsors: **Black Forest Labs FLUX** (text → image), **Liquid LFM2** (request parsing + context GC, local via Ollama), **Rawtree** (event stream + memory panel; the hackathon analytics cluster). 3D: **Hunyuan3D-2** via fal.ai (`FAL_KEY`, hosted, default) or a local `api_server.py` (`MESH_PROVIDER=local`).
 
@@ -12,6 +14,7 @@ ticket ──LFM2 parse──▶ FLUX image ──▶ Hunyuan GLB ──▶ plac
 ## Layout
 | Path | What |
 |---|---|
+| `orchestrator/interpret.js` | Conversation → `{reply, actions}` (gpt-5-mini, JSON mode) with world state + personal memory in the prompt. Falls back to regex commands without a key. |
 | `orchestrator/index.js` | The loop. `FAKE_PIPELINE=1` skips FLUX/Hunyuan and places a cube (test the loop + resume without keys). |
 | `orchestrator/board.js` | Task board HTTP client. |
 | `memory/` | `state.js` (typed state, atomic checkpoint, position picking), `gc.js` (LFM2 keep/drop → knowledge), `render.js` (prompt slice + token count), `handoff.js`, `liquid.js`, `events.js` (Rawtree ingest + SQL queries). |
@@ -24,7 +27,7 @@ ticket ──LFM2 parse──▶ FLUX image ──▶ Hunyuan GLB ──▶ plac
 
 ## Run (Node 20: `export PATH="/opt/homebrew/opt/node@20/bin:$PATH"`)
 ```bash
-cp .env.example .env            # BFL_API_KEY, HUNYUAN_URL, TINYBIRD_* ; Liquid is prefilled for Ollama
+cp .env.example .env            # OPENAI_API_KEY, BFL_API_KEY, FAL_KEY, RAWTREE_API_KEY, NIMBLE_API_KEY; Liquid is prefilled for Ollama
 npm install && (cd taskboard && npm install)
 ollama serve                    # LFM2.5-1.2B already pulled
 scripts/start-taskboard.sh      # board http://localhost:3100  ·  world http://localhost:3100/world/

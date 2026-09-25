@@ -122,6 +122,8 @@ app.get('/world.json', (req, res) => {
     const assets = Object.values(st.assets || {}).filter(a => a.status === 'placed');
     const pending = Object.values(st.tickets || {}).filter(t => t.status === 'in_progress').length;
     const live = { ...(st.live || {}) }; live.condition = live.override?.condition || live.real_condition || 'clear';
+    live.night = live.override?.night ?? live.is_night_real ?? false;
+    live.point = st.live?.point || null;
     res.json({ assets, pending, landmarks: st.landmarks || {}, live });
 });
 app.get('/state.json', (req, res) => {
