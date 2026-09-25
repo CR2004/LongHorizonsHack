@@ -3,12 +3,12 @@ import { classify } from './liquid.js';
 import { logEvent } from './state.js';
 import { emit } from './events.js';
 
-const NOISE = /^\s*$|^\[?(GIN|INFO|DEBUG)\b|progress|polling|Pending/i;
+const NOISE = /^\s*$|^\[?(GIN|INFO|DEBUG)\b|progress|polling|Pending|^(flux|hunyuan|fal3d|parsed request) /i;   // pipeline status lines: facts already in the checkpoint
 
 export async function collect(state, observation, { currentGoal, source = 'system' } = {}) {
     const text = typeof observation === 'string' ? observation : JSON.stringify(observation);
     let d;
-    if (NOISE.test(text.slice(0, 80))) d = { op: 'drop', slot: 'none', content: '', reason: 'noise prefilter', latencyMs: 0 };
+    if (NOISE.test(text.slice(0, 80))) d = { op: 'drop', slot: 'none', content: '', reason: 'pipeline status, already in checkpoint', latencyMs: 0 };
     else {
         try { d = await classify(text, currentGoal); }
         catch (e) { d = { op: 'drop', slot: 'none', content: '', reason: `lfm2 error: ${e.message.slice(0, 60)}`, latencyMs: 0 }; }

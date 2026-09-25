@@ -16,7 +16,7 @@ input{font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;ba
 </style></head>
 <body>
 <header><b>HorizonCraft · memory panel</b>
-  <input id="host" placeholder="Tinybird host" size="28"><input id="token" placeholder="read token" size="24" type="password">
+  <input id="host" placeholder="tinybird host (optional)" size="22"><input id="token" placeholder="tinybird token (optional)" size="24" type="password">
   <input id="run" placeholder="run_id (optional)" size="10"><span id="status"></span></header>
 <main>
   <section><h2>Counters</h2><div class="counters" id="counters"></div></section>
@@ -28,7 +28,7 @@ input{font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;ba
 const $ = id => document.getElementById(id);
 const store = { get(k){try{return localStorage.getItem(k)||''}catch{return ''}}, set(k,v){try{localStorage.setItem(k,v)}catch{}} };
 const qs = new URLSearchParams(location.search);
-for (const k of ['host','token','run']) { $(k).value = qs.get(k) || store.get('hc_'+k) || (k==='host'?'https://api.tinybird.co':''); $(k).onchange = () => store.set('hc_'+k, $(k).value); }
+for (const k of ['host','token','run']) { $(k).value = qs.get(k) || store.get('hc_'+k) || ''; $(k).onchange = () => store.set('hc_'+k, $(k).value); }
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 async function pipe(name, params = {}) {
@@ -54,8 +54,9 @@ function renderFeed(rows) {
 function renderChart(rows) {
   const pts = rows.slice().reverse(); const svg = $('chart');
   if (!pts.length) { svg.innerHTML = '<text x="10" y="80" fill="currentColor" font-size="12">no token data</text>'; return; }
-  const max = Math.max(...pts.map(p => +p.tokens), 1);
-  const d = pts.map((p,i) => `${(i/(Math.max(pts.length-1,1)))*300},${155 - (+p.tokens/max)*145}`).join(' ');
+  const val = p => +(p.tokens ?? p.tokens_max ?? 0);
+  const max = Math.max(...pts.map(val), 1);
+  const d = pts.map((p,i) => `${(i/(Math.max(pts.length-1,1)))*300},${155 - (val(p)/max)*145}`).join(' ');
   svg.innerHTML = `<polyline fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" points="${d}"/>
     <text x="4" y="12" fill="currentColor" font-size="11">max ${max}</text>`;
 }
@@ -69,8 +70,18 @@ async function tickLocal() {
   renderChart((st.context_history || []).slice().reverse().map(h => ({ tokens: h })));   // renderChart expects newest-first
   $('status').textContent = 'local state · ' + new Date().toLocaleTimeString();
 }
+async function tickProxy() {   // Rawtree via the board's /analytics proxy (key stays server-side)
+  const b = qs.get('board') || 'http://localhost:3100'; const run = $('run').value ? '?run_id=' + encodeURIComponent($('run').value) : '';
+  const get = async n => { const r = await fetch(`${b}/analytics/${n}${run}`); if (!r.ok) throw new Error((await r.json()).error || r.status); return (await r.json()).data; };
+  const [c, feed, ctx] = await Promise.all([get('counters'), get('recent_events'), get('context_tokens')]);
+  renderCounters(c[0]); renderFeed(feed); renderChart(ctx); $('status').textContent = 'rawtree · ' + new Date().toLocaleTimeString();
+}
 async function tick() {
-  if (!$('token').value) { try { await tickLocal(); } catch (e) { $('status').textContent = 'no token; local state unreachable: ' + e.message; } return; }
+  if (!$('token').value) {
+    if (qs.get('source') === 'local') { try { await tickLocal(); } catch (e) { $('status').textContent = 'local state unreachable: ' + e.message; } return; }
+    try { await tickProxy(); } catch (e) { try { await tickLocal(); $('status').textContent += ' (rawtree unavailable: ' + e.message + ')'; } catch (e2) { $('status').textContent = 'no data: ' + e.message; } }
+    return;
+  }
   try {
     const [c, feed, ctx] = await Promise.all([pipe('counters'), pipe('recent_events', { limit: 100 }), pipe('context_tokens')]);
     renderCounters(c[0]); renderFeed(feed); renderChart(ctx);

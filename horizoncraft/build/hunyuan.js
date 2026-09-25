@@ -4,11 +4,18 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { env } from '../memory/env.js';
+import { imageToGlbFal } from './fal3d.js';
 
 const base = () => (env.HUNYUAN_URL || 'http://localhost:8081').replace(/\/$/, '');
 
 // Synchronous /generate: returns the GLB bytes. Can take minutes; texture=true needs the 16GB path.
-export async function imageToGlb(imageFile, { texture = false, octree_resolution = 128, num_inference_steps = 5, seed = 1234, face_count = 40000, outDir = 'build/out', timeoutMs = 600000 } = {}) {
+// MESH_PROVIDER=fal (default, hosted) | local (teammate's api_server.py at HUNYUAN_URL)
+export async function imageToGlb(imageFile, opts = {}) {
+    if ((env.MESH_PROVIDER || 'fal') === 'fal') return imageToGlbFal(imageFile, opts);
+    return imageToGlbLocal(imageFile, opts);
+}
+
+export async function imageToGlbLocal(imageFile, { texture = false, octree_resolution = 128, num_inference_steps = 5, seed = 1234, face_count = 40000, outDir = 'build/out', timeoutMs = 600000 } = {}) {
     const t0 = Date.now();
     const body = { image: readFileSync(imageFile).toString('base64'), texture, octree_resolution, num_inference_steps, seed, face_count, type: 'glb' };
     const res = await fetch(`${base()}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });

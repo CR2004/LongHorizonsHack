@@ -8,6 +8,7 @@ export function render(state, { currentGoal } = {}) {
         `LANDMARKS: ${Object.entries(state.landmarks).map(([k, v]) => `${k}(${v.x},${v.z})`).join(', ')}`,
         placed.length ? `PLACED: ${placed.slice(-12).join(', ')}` : null,
         state.knowledge.length ? `KNOWN: ${state.knowledge.slice(-5).map(k => k.fact).join(' | ')}` : null,
+        state.personal?.facts?.length ? `ABOUT THE PERSON: ${state.personal.facts.slice(-6).join(' | ')}` : null,
         state.failures.length ? `AVOID: ${state.failures.slice(-3).map(f => `${f.stage}: ${f.reason}`).join(' | ')}` : null,
     ].filter(Boolean);
     const text = lines.join('\n').slice(0, 1200);

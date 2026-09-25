@@ -20,8 +20,15 @@ async function playerLocation() {
 
 export async function tick(state, { save }) {
     state.live ??= {};
-    const loc = await playerLocation();   // weather follows the player; NWS covers the US only, else the SF default page
+    if (state.live.place) {   // "I'm going to Tahoe" -> the sky follows Tahoe's real weather
+        SOURCES[0].url = `https://wttr.in/${encodeURIComponent(state.live.place)}?T`;
+        SOURCES[0].question = `What is the current weather condition (one word: clear, cloudy, fog, rain, wind, snow) and temperature in Fahrenheit in ${state.live.place}? Answer as "condition, NN F".`;
+    }
+    const loc = state.live.place ? null : await playerLocation();   // weather follows the player; NWS covers the US only, else the SF default page
     if (loc) { SOURCES[0].url = `https://forecast.weather.gov/MapClick.php?lat=${loc.lat.toFixed(4)}&lon=${loc.lon.toFixed(4)}`; state.live.location = { lat: loc.lat, lon: loc.lon }; }
+    // "news about X" from the chat -> a plain-HTML search results page instead of the HN front page
+    SOURCES[1].url = state.live.news_query ? `https://html.duckduckgo.com/html/?q=${encodeURIComponent(state.live.news_query + ' news')}` : (env.LIVE_NEWS_URL || 'https://news.ycombinator.com/');
+    SOURCES[1].question = state.live.news_query ? `What is the most recent news headline about "${state.live.news_query}" on this page? Answer with just the headline text.` : 'What is the top headline on this page? Answer with just the headline text.';
     for (const s of SOURCES) {
         try {
             const page = await fetchPage(s.url, { render: s.render });
@@ -31,7 +38,7 @@ export async function tick(state, { save }) {
             state.live[s.key] = { value: answer, source: s.url, ts: new Date().toISOString() };
             if (s.key === 'weather') {
                 const v = answer.toLowerCase();
-                state.live.real_condition = /rain|shower|drizzle/.test(v) ? 'rain' : /fog|mist|haze/.test(v) ? 'fog' : /cloud|overcast/.test(v) ? 'cloudy' : 'clear';
+                state.live.real_condition = /rain|shower|drizzle|snow|sleet/.test(v) ? 'rain' : /fog|mist|haze/.test(v) ? 'fog' : /cloud|overcast/.test(v) ? 'cloudy' : 'clear';
                 const m = v.match(/(-?\d+)\s*°?\s*f/); state.live.temp_f = m ? +m[1] : null;
             }
             state.counters.gc_kept++;

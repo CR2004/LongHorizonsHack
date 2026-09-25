@@ -16,6 +16,7 @@ export const board = {
     comment: (id, body, author = 'agent') => timed(`comment ${id}`, fetch(`${base()}/tickets/${id}/comments`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, author }), redirect: 'manual' })),
     close: id => timed(`close ${id}`, fetch(`${base()}/tickets/${id}/close`, { method: 'POST', redirect: 'manual' })),
+    file: (title, author = 'agent') => timed('file', fetch(`${base()}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, author }) }).then(r => r.json())),
     reopen: id => fetch(`${base()}/tickets/${id}/reopen`, { method: 'POST', redirect: 'manual' }),
     // Post proof then close, then re-read to confirm (the "board confirms the close" half of verification).
     async commentAndClose(id, proof) {

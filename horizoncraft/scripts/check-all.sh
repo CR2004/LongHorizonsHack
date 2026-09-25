@@ -24,8 +24,8 @@ run "5 board http" node scripts/smoke/board.mjs
 run "6 loop (fake pipeline, 1 ticket)" env FAKE_PIPELINE=1 node scripts/smoke/loop.mjs
 run "7 bfl image" node scripts/smoke/bfl.mjs
 [ -n "${WITH_VIDEO:-}" ] && run "7b bfl video" node scripts/smoke/bfl-video.mjs
-run "8 hunyuan" node scripts/smoke/hunyuan.mjs
+run "8 image->3d ($MESH_PROVIDER)" node scripts/smoke/hunyuan.mjs
 run "8b nimble live" node scripts/smoke/nimble-live.mjs
-run "9 tinybird" node scripts/smoke/tinybird.mjs
-echo "10 dashboard: open dashboard/index.html (reads local state; add ?host=&token= for Tinybird)"
+run "9 rawtree analytics" node scripts/smoke/analytics.mjs
+echo "10 dashboard: http://localhost:3100/dashboard/ (Rawtree via proxy, falls back to local state)"
 echo "---- $pass passed, $fail failed"

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import multer from 'multer';
+import { queryPipe } from '../memory/events.js';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const PORT = process.env.PORT || 3100;
@@ -15,13 +16,14 @@ CREATE TABLE IF NOT EXISTS tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, title 
 CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL, author TEXT DEFAULT 'agent',
   body TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
 
-const SEED = ['create a stone castle', 'add a dragon near the lake', 'put a lighthouse near the castle', 'a giant mushroom', 'a wooden bridge near the lake'];
+const SEED = [];   // start empty; judges file the tickets
 function seed() {
     db.exec('DELETE FROM comments; DELETE FROM tickets; DELETE FROM sqlite_sequence;');
     const ins = db.prepare('INSERT INTO tickets (title) VALUES (?)');
     SEED.forEach(t => ins.run(t));
 }
 try { db.exec('ALTER TABLE tickets ADD COLUMN photo TEXT'); } catch {}
+try { db.exec('ALTER TABLE tickets ADD COLUMN author TEXT'); } catch {}
 if (db.prepare('SELECT COUNT(*) c FROM tickets').get().c === 0) seed();
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -38,7 +40,7 @@ main{max-width:640px;margin:0 auto;padding:16px}a{color:inherit}h1{font-size:1.4
 input,textarea,button{font:inherit;width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);margin:4px 0}
 button{background:var(--accent);color:#fff;border:0;font-weight:600}button.secondary{background:transparent;color:var(--fg);border:1px solid var(--line)}
 .muted{color:var(--muted);font-size:.85rem}nav{display:flex;gap:12px;margin-bottom:8px}
-</style></head><body><main><nav><a href="/" id="nav-home">Tickets</a><a href="/new" id="nav-new">+ New ticket</a></nav>${body}</main></body></html>`;
+</style></head><body><main><nav><a href="/world/" id="nav-world">World</a><a href="/board" id="nav-home">Tickets</a><a href="/new" id="nav-new">+ New ticket</a></nav>${body}</main></body></html>`;
 
 const UPLOADS = path.join(ROOT, 'uploads'); mkdirSync(UPLOADS, { recursive: true });
 const upload = multer({ dest: UPLOADS, limits: { fileSize: 15 * 1024 * 1024 }, fileFilter: (req, f, cb) => cb(null, /^image\//.test(f.mimetype)) });
@@ -46,7 +48,8 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-app.get('/', (req, res) => {
+app.get('/', (req, res) => res.redirect('/world/'));
+app.get('/board', (req, res) => {
     const rows = db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM comments c WHERE c.ticket_id=t.id) n FROM tickets t
                              ORDER BY (t.status='closed'), t.id`).all();
     res.send(page('Task board', `<h1>Task board</h1><div id="ticket-list">${rows.map(t =>
@@ -65,7 +68,7 @@ app.post('/tickets', upload.single('photo'), (req, res) => {
     if (!title) return res.status(400).send('title required');
     const photo = req.file ? req.file.path : null;
     const { lastInsertRowid } = db.prepare('INSERT INTO tickets (title, body, photo) VALUES (?, ?, ?)').run(title, String(req.body.body || '').slice(0, 2000), photo);
-    res.redirect(`/tickets/${lastInsertRowid}`);
+    res.redirect(`/tickets/${lastInsertRowid}?new=1`);
 });
 
 app.get('/tickets/:id', (req, res) => {
@@ -73,12 +76,13 @@ app.get('/tickets/:id', (req, res) => {
     if (!t) return res.status(404).send(page('Not found', '<h1>Ticket not found</h1>'));
     const cs = db.prepare('SELECT * FROM comments WHERE ticket_id=? ORDER BY id').all(t.id);
     res.send(page(`#${t.id} ${t.title}`, `<h1 id="ticket-title">#${t.id} ${esc(t.title)}</h1>
-<p><span id="ticket-status" data-testid="ticket-status" data-status="${t.status}" class="st ${t.status}">${t.status}</span></p>
-<p>${esc(t.body)}</p>${t.photo ? '<p class="muted" id="has-photo">Photo attached (kept private, used once to make your character)</p>' : ''}<h3>Comments</h3><div id="comments">${cs.map(c =>
+${req.query.new ? '<div class="card" id="filed-banner"><b>Filed.</b> The agent picks this up within a few seconds. Watch it progress on the <a href="/dashboard/">memory panel</a> and appear in the <a href="/world/">world</a> in a few minutes. Nothing else to do here.</div>' : ''}
+<p><span id="ticket-status" data-testid="ticket-status" data-status="${t.status}" class="st ${t.status}">${t.status}</span>${t.status === 'open' ? ' <span class="muted">— waiting for / being built by the agent</span>' : ''}</p>
+<p>${esc(t.body)}</p>${t.photo ? '<p class="muted" id="has-photo">Photo attached (kept private, used once to make your character)</p>' : ''}<h3>Activity</h3><p class="muted">The agent posts its proof here when it finishes.</p><div id="comments">${cs.map(c =>
         `<div class="card" id="comment-${c.id}"><div class="muted">${esc(c.author)} · ${c.created_at}</div>${esc(c.body)}</div>`).join('') || '<p class="muted">No comments yet.</p>'}</div>
-<form method="post" action="/tickets/${t.id}/comments" id="comment-form"><textarea id="comment-input" data-testid="comment-input" name="body" rows="3" placeholder="Add a comment" required></textarea>
-<button id="comment-submit" data-testid="comment-submit" type="submit">Comment</button></form>
-${t.status === 'open' ? `<form method="post" action="/tickets/${t.id}/close" id="close-form"><button id="close-btn" data-testid="close-btn" class="secondary" type="submit">Close ticket</button></form>`
+<form method="post" action="/tickets/${t.id}/comments" id="comment-form"><details><summary class="muted">Add a note (optional)</summary><textarea id="comment-input" data-testid="comment-input" name="body" rows="2" placeholder="Optional note" required></textarea>
+<button id="comment-submit" data-testid="comment-submit" type="submit">Add note</button></details></form>
+${t.status === 'open' ? `<form method="post" action="/tickets/${t.id}/close" id="close-form"><button id="close-btn" data-testid="close-btn" class="secondary" type="submit">Cancel ticket</button></form>`
             : `<form method="post" action="/tickets/${t.id}/reopen" id="reopen-form"><button id="reopen-btn" data-testid="reopen-btn" class="secondary" type="submit">Reopen</button></form>`}`));
 });
 
@@ -97,7 +101,7 @@ app.post('/tickets/:id/reopen', (req, res) => {
 });
 
 // JSON API (for checks + dashboard). Reset is guarded by ADMIN_TOKEN.
-app.get('/api/tickets', (req, res) => res.json(db.prepare('SELECT * FROM tickets ORDER BY id').all()));
+app.get('/api/tickets', (req, res) => res.json(db.prepare('SELECT * FROM tickets ORDER BY id').all()));   // includes author + photo
 app.get('/api/tickets/:id', (req, res) => {
     const t = db.prepare('SELECT * FROM tickets WHERE id=?').get(req.params.id);
     if (!t) return res.status(404).json({ error: 'not found' });
@@ -129,6 +133,35 @@ app.get('/state.json', (req, res) => {
 let playerLocation = null;
 app.post('/api/location', (req, res) => { const { lat, lon } = req.body || {}; if (typeof lat === 'number' && typeof lon === 'number') playerLocation = { lat, lon, ts: Date.now() }; res.json({ ok: !!playerLocation }); });
 app.get('/api/location', (req, res) => res.json(playerLocation || {}));
+// Analytics proxy for the dashboard (runs the SQL server-side with RAWTREE_API_KEY)
+app.get('/analytics/:name', async (req, res) => {
+    try { res.json({ data: await queryPipe(req.params.name, req.query) }); }
+    catch (e) { res.status(502).json({ error: e.message }); }
+});
+// ---- Chat = tickets (user) + comments (agent), one stream. POST creates a ticket like the form does.
+function stateNow() { const f = process.env.STATE_FILE || path.join(ROOT, 'state/horizon.json'); return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : {}; }
+const STAGE_TEXT = { queued: 'queued', parsed: 'understood, drawing it…', image: 'image ready, building the 3D model…', mesh: 'model ready, placing…', placed: 'placed' };
+app.get('/api/chat', (req, res) => {
+    const st = stateNow(); const rows = [];
+    for (const t of db.prepare('SELECT * FROM tickets ORDER BY id').all()) {
+        const a = st.assets?.[t.id]; const sT = st.tickets?.[t.id];
+        let state = null, stateText = '';
+        if (t.status === 'open') { state = 'pending'; stateText = a ? STAGE_TEXT[a.stage] || a.stage : (sT?.status === 'failed' ? 'failed' : 'waiting for the agent'); }
+        if (sT?.status === 'failed') { state = 'failed'; stateText = 'failed: ' + (sT.reason || '').slice(0, 80); }
+        if (t.status === 'closed') { state = 'done'; stateText = 'done'; }
+        rows.push({ id: `t${t.id}`, role: 'user', author: t.author || 'someone', text: t.title, ts: t.created_at, ticket_id: t.id, state, stateText });
+        for (const c of db.prepare('SELECT * FROM comments WHERE ticket_id=? ORDER BY id').all(t.id))
+            rows.push({ id: `c${c.id}`, role: c.author === 'agent' ? 'agent' : 'user', author: c.author, text: c.body, ts: c.created_at, ticket_id: t.id });
+    }
+    rows.sort((x, y) => x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0);
+    res.json(rows.slice(-80));
+});
+app.post('/api/chat', upload.single('photo'), (req, res) => {
+    const title = String(req.body.title || '').trim().slice(0, 200);
+    if (!title) return res.status(400).json({ error: 'empty' });
+    const { lastInsertRowid } = db.prepare('INSERT INTO tickets (title, body, photo, author) VALUES (?, ?, ?, ?)').run(title, '', req.file ? req.file.path : null, String(req.body.author || 'visitor').slice(0, 24));
+    res.json({ id: lastInsertRowid });
+});
 app.get('/healthz', (req, res) => res.send('ok'));
 
 app.listen(PORT, () => console.log(`taskboard on :${PORT}`));

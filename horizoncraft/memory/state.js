@@ -9,6 +9,7 @@ export function emptyState() {
         version: 2,
         tickets: {},      // id -> { id, title, status: todo|in_progress|done_verified|failed, reason? }
         assets: {},       // ticket_id -> { id, ticket_id, name, prompt, stage, image?, glb?, url?, x, z, size, rotation, status, views? }
+        personal: { facts: [] },   // what the person told us: interests, places, people, plans (drives the interpreter)
         landmarks: { lake: { x: 30, z: -20, note: 'blue circle, exists from the start' } },   // name -> { x, z, note }
         knowledge: [],    // [{ fact, source, ts }]
         failures: [],     // [{ ticket_id, stage, reason, ts }]
@@ -36,7 +37,8 @@ export function logEvent(state, type, summary) {
 // Pick a spot: near a landmark (offset ring) or the next free ring slot around the origin.
 export function pickPosition(state, near) {
     const taken = Object.values(state.assets).filter(a => a.x != null);
-    const free = (x, z) => taken.every(a => Math.hypot(a.x - x, a.z - z) > 7) && Math.hypot(x, z) > 4;
+    const SPAWN = { x: 0, z: 12 };   // matches the camera start in world/index.html
+    const free = (x, z) => taken.every(a => Math.hypot(a.x - x, a.z - z) > 7) && Math.hypot(x, z) > 6 && Math.hypot(x - SPAWN.x, z - SPAWN.z) > 12;
     const lm = near && state.landmarks[near];
     if (lm) for (let r = 12; r < 40; r += 4) for (let k = 0; k < 8; k++) {
         const x = Math.round(lm.x + r * Math.cos(k * Math.PI / 4)), z = Math.round(lm.z + r * Math.sin(k * Math.PI / 4));
