@@ -1,0 +1,16 @@
+{
+  "name": "horizoncraft",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "check": "bash scripts/check-all.sh",
+    "orchestrator": "node orchestrator/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^4.77.0"
+  }
+}

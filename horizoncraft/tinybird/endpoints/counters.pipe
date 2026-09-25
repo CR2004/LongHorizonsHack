@@ -1,0 +1,17 @@
+DESCRIPTION >
+    Switches, tickets closed, resumes, GC decisions.
+
+NODE counters
+SQL >
+    %
+    SELECT
+        countIf(type = 'switch_out') AS switches,
+        countIf(type = 'ticket_update' AND JSONExtractString(payload, 'status') = 'done_verified') AS tickets_closed,
+        countIf(type = 'resume') AS resumes,
+        countIf(type = 'gc_decision') AS gc_decisions,
+        countIf(type = 'gc_decision' AND JSONExtractString(payload, 'op') = 'drop') AS gc_dropped,
+        count() AS total_events
+    FROM events
+    WHERE 1 {% if defined(run_id) %} AND run_id = {{String(run_id)}} {% end %}
+
+TYPE endpoint
